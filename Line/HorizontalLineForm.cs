@@ -6,11 +6,12 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
 using System.Reflection;
+using System.Linq;
 
 namespace Line
 {
-    // 可拖拽的竖线类
-    public class DraggableVerticalLine : Form
+    // 可拖拽的横线类
+    public class DraggableHorizontalLine : Form
     {
         private bool isDragging = false;
         private Point lastCursor;
@@ -26,7 +27,7 @@ namespace Line
         [DllImport("user32.dll")]
         private static extern int SetWindowLong(IntPtr hwnd, int index, int newStyle);
 
-        public DraggableVerticalLine(int width, int height, Color color, double opacity, bool clickThrough)
+        public DraggableHorizontalLine(int width, int height, Color color, double opacity, bool clickThrough)
         {
             this.FormBorderStyle = FormBorderStyle.None;
             this.ShowInTaskbar = false;
@@ -47,7 +48,7 @@ namespace Line
                 this.MouseDown += OnMouseDown;
                 this.MouseMove += OnMouseMove;
                 this.MouseUp += OnMouseUp;
-                this.Cursor = Cursors.SizeWE; // 设置为水平调整大小光标
+                this.Cursor = Cursors.SizeNS; // 设置为垂直调整大小光标
             }
         }
 
@@ -76,7 +77,7 @@ namespace Line
                 {
                     int exStyle = GetWindowLong(this.Handle, GWL_EXSTYLE);
                     SetWindowLong(this.Handle, GWL_EXSTYLE, exStyle & ~WS_EX_TRANSPARENT);
-                    this.Cursor = Cursors.SizeWE;
+                    this.Cursor = Cursors.SizeNS;
                     // 添加拖拽事件
                     this.MouseDown -= OnMouseDown; // 先移除避免重复
                     this.MouseMove -= OnMouseMove;
@@ -102,9 +103,9 @@ namespace Line
             if (isDragging)
             {
                 Point currentCursor = Cursor.Position;
-                int deltaX = currentCursor.X - lastCursor.X;
+                int deltaY = currentCursor.Y - lastCursor.Y;
                 
-                this.Location = new Point(this.Location.X + deltaX, this.Location.Y);
+                this.Location = new Point(this.Location.X, this.Location.Y + deltaY);
                 lastCursor = currentCursor;
             }
         }
@@ -118,18 +119,18 @@ namespace Line
         }
     }
 
-    public class VerticalLineForm : Form
+    public class HorizontalLineForm : Form
     {
         private const int WM_HOTKEY = 0x0312;
-        private Dictionary<int, DraggableVerticalLine> verticalLines = new Dictionary<int, DraggableVerticalLine>();
+        private Dictionary<int, List<DraggableHorizontalLine>> horizontalLines = new Dictionary<int, List<DraggableHorizontalLine>>();
         private Dictionary<int, bool> lineStates = new Dictionary<int, bool>();
         private NotifyIcon trayIcon;
 
-        // 线条默认宽度为1像素
-        private int lineWidth = 1;
+        // 线条默认高度为1像素
+        private int lineHeight = 1;
 
-        // 线条颜色，默认为蓝色
-        private Color lineColor = Color.Blue;
+        // 线条颜色，默认为绿色
+        private Color lineColor = Color.Green;
 
         // 线条透明度，默认为100%
         private int lineOpacity = 100;
@@ -137,12 +138,15 @@ namespace Line
         // 鼠标穿透设置
         private bool mouseClickThrough = true;
 
+        // 显示模式：false=仅当前屏幕，true=全部屏幕
+        private bool showOnAllScreens = false;
+
         // 热键ID基础值（1-4用于开启，5-8用于关闭）
-        private const int BASE_HOTKEY_ID_ON = 100;
-        private const int BASE_HOTKEY_ID_OFF = 200;
+        private const int BASE_HOTKEY_ID_ON = 300;
+        private const int BASE_HOTKEY_ID_OFF = 400;
 
         // 热键绑定状态
-        private bool[] hotkeyEnabled = new bool[] { true, false, false, false }; // 默认只启用第一组
+        private bool[] hotkeyEnabled = new bool[] { true, true, false, false }; // 默认启用前两组
 
         // 用于处理初始显示的标志
         private bool isFirstShow = true;
@@ -151,17 +155,18 @@ namespace Line
         private readonly string configPath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             "ScreenLine",
-            "vertical_config.json"
+            "horizontal_config.json"
         );
 
         // 配置类
         private class Config
         {
             public bool[] HotkeyEnabled { get; set; }
-            public int LineWidth { get; set; }
+            public int LineHeight { get; set; }
             public string LineColor { get; set; }
             public int LineOpacity { get; set; }
             public bool MouseClickThrough { get; set; }
+            public bool ShowOnAllScreens { get; set; }
         }
 
         [DllImport("user32.dll")]
@@ -169,10 +174,6 @@ namespace Line
 
         [DllImport("user32.dll")]
         private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
-
-        // 修饰键常量
-        private const int MOD_CONTROL = 0x0002;
-        private const int MOD_SHIFT = 0x0004;
 
         // 增强的置顶Windows API
         [DllImport("user32.dll")]
@@ -187,7 +188,11 @@ namespace Line
         private const uint SWP_NOSIZE = 0x0001;
         private const uint SWP_SHOWWINDOW = 0x0040;
 
-        public VerticalLineForm(NotifyIcon existingTrayIcon)
+        // 修饰键常量
+        private const int MOD_CONTROL = 0x0002;
+        private const int MOD_SHIFT = 0x0004;
+
+        public HorizontalLineForm(NotifyIcon existingTrayIcon)
         {
             this.AutoScaleMode = AutoScaleMode.None;
             this.trayIcon = existingTrayIcon;
@@ -197,12 +202,12 @@ namespace Line
 
             InitializeComponent();
             InitializeHotkeys();
-            AddVerticalLineMenuItems();
+            AddHorizontalLineMenuItems();
             
             // 设置初始鼠标穿透状态
             SetClickThrough(mouseClickThrough);
 
-            // 显示一次初始竖线，然后立即隐藏
+            // 显示一次初始横线，然后立即隐藏
             ShowInitialLine();
         }
 
@@ -210,30 +215,13 @@ namespace Line
         {
             if (isFirstShow)
             {
-                // 创建并显示一个临时的竖线
-                Form tempLine = new Form
-                {
-                    FormBorderStyle = FormBorderStyle.None,
-                    ShowInTaskbar = false,
-                    TopMost = true,
-                    BackColor = lineColor,
-                    TransparencyKey = Color.Black,
-                    Opacity = lineOpacity / 100.0,
-                    Width = lineWidth,
-                    Height = Screen.PrimaryScreen.Bounds.Height,
-
-                     // ③ 临时线也要关掉缩放
-                    AutoScaleMode = AutoScaleMode.None,
-                    StartPosition = FormStartPosition.Manual,
-                    Location = new Point(
-                      Screen.PrimaryScreen.Bounds.Width / 2,
-                      Screen.PrimaryScreen.Bounds.Y)
-                };
-
-                // 放在屏幕中央
-                tempLine.Location = new Point(
-                    Screen.PrimaryScreen.Bounds.Width / 2,
-                    Screen.PrimaryScreen.Bounds.Y
+                // 创建并显示一个临时的横线
+                DraggableHorizontalLine tempLine = new DraggableHorizontalLine(
+                    Screen.PrimaryScreen.Bounds.Width,
+                    lineHeight,
+                    lineColor,
+                    lineOpacity / 100.0,
+                    mouseClickThrough
                 );
 
                 tempLine.Show();
@@ -253,9 +241,8 @@ namespace Line
             this.BackColor = lineColor;
             this.TransparencyKey = Color.Black;
             this.AutoScaleMode = AutoScaleMode.None;
-            this.Width = lineWidth;
-            this.Height = Screen.PrimaryScreen.Bounds.Height;
-            // 不在这里设置 Opacity，而是在 ShowInitialLine 中处理
+            this.Width = Screen.PrimaryScreen.Bounds.Width;
+            this.Height = lineHeight;
         }
 
         private void InitializeHotkeys()
@@ -276,10 +263,10 @@ namespace Line
             {
                 if (index >= 0 && index < 4)
                 {
-                    Keys key = Keys.F1 + index;
-                    // 注册 Ctrl+F1-F4
+                    Keys key = Keys.D1 + index; // 数字键1-4
+                    // 注册 Ctrl+1-4
                     bool onSuccess = RegisterHotKey(this.Handle, BASE_HOTKEY_ID_ON + index, MOD_CONTROL, (int)key);
-                    // 注册 Ctrl+Shift+F1-F4
+                    // 注册 Ctrl+Shift+1-4
                     bool offSuccess = RegisterHotKey(this.Handle, BASE_HOTKEY_ID_OFF + index, MOD_CONTROL | MOD_SHIFT, (int)key);
 
                     // 如果注册失败，更新状态并保存配置
@@ -288,7 +275,7 @@ namespace Line
                         hotkeyEnabled[index] = false;
                         UpdateHotkeyMenuCheckedState();
                         SaveConfig();
-                        MessageBox.Show($"热键 Ctrl+F{index + 1} 注册失败，可能已被其他程序占用。", "警告", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        MessageBox.Show($"热键 Ctrl+{index + 1} 注册失败，可能已被其他程序占用。", "警告", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     }
                 }
             }
@@ -313,33 +300,76 @@ namespace Line
         private void SetClickThrough(bool enable)
         {
             mouseClickThrough = enable;
-            
-            // 更新所有现有的竖线
-            foreach (var line in verticalLines.Values)
+            foreach (var linesList in horizontalLines.Values)
             {
-                line.SetClickThrough(enable);
+                foreach (var line in linesList)
+                {
+                    line.SetClickThrough(enable);
+                }
             }
-            
             SaveConfig();
         }
 
-        private void AddVerticalLineMenuItems()
+        private void AddHorizontalLineMenuItems()
         {
             if (trayIcon?.ContextMenuStrip == null) return;
 
-            ToolStripMenuItem verticalLineMenu = new ToolStripMenuItem("持续竖线");
+            ToolStripMenuItem horizontalLineMenu = new ToolStripMenuItem("持续横线");
 
             // 热键绑定菜单
             ToolStripMenuItem hotkeyBindingMenu = new ToolStripMenuItem("热键绑定");
             for (int i = 0; i < 4; i++)
             {
                 int index = i;
-                var item = new ToolStripMenuItem($"Ctrl+F{i + 1}/Ctrl+Shift+F{i + 1}", null, (s, e) => {
+                var item = new ToolStripMenuItem($"Ctrl+{i + 1}/Ctrl+Shift+{i + 1}", null, (s, e) => {
                     ToggleHotkeyBinding(index);
                 });
                 item.Checked = hotkeyEnabled[i];
                 hotkeyBindingMenu.DropDownItems.Add(item);
             }
+
+            // 显示模式菜单
+            ToolStripMenuItem displayModeMenu = new ToolStripMenuItem("显示模式");
+            var currentScreenItem = new ToolStripMenuItem("仅鼠标所在屏幕", null, (s, e) => {
+                showOnAllScreens = false;
+                if (s is ToolStripMenuItem menuItem)
+                {
+                    menuItem.Checked = true;
+                    // 更新另一个选项的状态
+                    foreach (ToolStripMenuItem item in displayModeMenu.DropDownItems)
+                    {
+                        if (item.Text == "所有屏幕")
+                        {
+                            item.Checked = false;
+                            break;
+                        }
+                    }
+                }
+                SaveConfig();
+            });
+            currentScreenItem.Checked = !showOnAllScreens;
+
+            var allScreensItem = new ToolStripMenuItem("所有屏幕", null, (s, e) => {
+                showOnAllScreens = true;
+                if (s is ToolStripMenuItem menuItem)
+                {
+                    menuItem.Checked = true;
+                    // 更新另一个选项的状态
+                    foreach (ToolStripMenuItem item in displayModeMenu.DropDownItems)
+                    {
+                        if (item.Text == "仅鼠标所在屏幕")
+                        {
+                            item.Checked = false;
+                            break;
+                        }
+                    }
+                }
+                SaveConfig();
+            });
+            allScreensItem.Checked = showOnAllScreens;
+
+            displayModeMenu.DropDownItems.Add(currentScreenItem);
+            displayModeMenu.DropDownItems.Add(allScreensItem);
 
             // 鼠标穿透选项
             var mousePenetrationItem = new ToolStripMenuItem("鼠标穿透", null, (s, e) => {
@@ -352,14 +382,14 @@ namespace Line
             mousePenetrationItem.Checked = mouseClickThrough;
 
             // 线条粗细菜单
-            ToolStripMenuItem lineThicknessItem = new ToolStripMenuItem("竖线粗细");
+            ToolStripMenuItem lineThicknessItem = new ToolStripMenuItem("横线粗细");
             AddThicknessMenuItem(lineThicknessItem, "细线 (1像素)", 1);
             AddThicknessMenuItem(lineThicknessItem, "中等 (2像素)", 2);
             AddThicknessMenuItem(lineThicknessItem, "粗线 (3像素)", 3);
             AddThicknessMenuItem(lineThicknessItem, "很粗 (5像素)", 5);
 
             // 线条颜色菜单
-            ToolStripMenuItem lineColorItem = new ToolStripMenuItem("竖线颜色");
+            ToolStripMenuItem lineColorItem = new ToolStripMenuItem("横线颜色");
             AddColorMenuItem(lineColorItem, "红色", Color.Red);
             AddColorMenuItem(lineColorItem, "绿色", Color.Green);
             AddColorMenuItem(lineColorItem, "蓝色", Color.Blue);
@@ -371,37 +401,57 @@ namespace Line
             AddColorMenuItem(lineColorItem, "白色", Color.White);
 
             // 透明度菜单
-            ToolStripMenuItem transparencyItem = new ToolStripMenuItem("竖线透明度");
+            ToolStripMenuItem transparencyItem = new ToolStripMenuItem("横线透明度");
             AddTransparencyMenuItem(transparencyItem, "100% (不透明)", 100);
             AddTransparencyMenuItem(transparencyItem, "75%", 75);
             AddTransparencyMenuItem(transparencyItem, "50%", 50);
             AddTransparencyMenuItem(transparencyItem, "25%", 25);
 
             // 添加所有子菜单
-            verticalLineMenu.DropDownItems.Add(hotkeyBindingMenu);
-            verticalLineMenu.DropDownItems.Add(mousePenetrationItem);
-            verticalLineMenu.DropDownItems.Add(lineThicknessItem);
-            verticalLineMenu.DropDownItems.Add(lineColorItem);
-            verticalLineMenu.DropDownItems.Add(transparencyItem);
+            horizontalLineMenu.DropDownItems.Add(hotkeyBindingMenu);
+            horizontalLineMenu.DropDownItems.Add(displayModeMenu);
+            horizontalLineMenu.DropDownItems.Add(mousePenetrationItem);
+            horizontalLineMenu.DropDownItems.Add(lineThicknessItem);
+            horizontalLineMenu.DropDownItems.Add(lineColorItem);
+            horizontalLineMenu.DropDownItems.Add(transparencyItem);
 
-            // 在分隔符之前插入竖线菜单
-            int separatorIndex = -1;
+            // 在竖线菜单之后插入横线菜单
+            int insertIndex = -1;
             for (int i = 0; i < trayIcon.ContextMenuStrip.Items.Count; i++)
             {
-                if (trayIcon.ContextMenuStrip.Items[i] is ToolStripSeparator)
+                if (trayIcon.ContextMenuStrip.Items[i] is ToolStripMenuItem menuItem && 
+                    menuItem.Text == "竖线设置")
                 {
-                    separatorIndex = i;
+                    insertIndex = i + 1;
                     break;
                 }
             }
 
-            if (separatorIndex != -1)
+            if (insertIndex != -1)
             {
-                trayIcon.ContextMenuStrip.Items.Insert(separatorIndex, verticalLineMenu);
+                trayIcon.ContextMenuStrip.Items.Insert(insertIndex, horizontalLineMenu);
             }
             else
             {
-                trayIcon.ContextMenuStrip.Items.Add(verticalLineMenu);
+                // 如果找不到竖线菜单，就在分隔符前插入
+                int separatorIndex = -1;
+                for (int i = 0; i < trayIcon.ContextMenuStrip.Items.Count; i++)
+                {
+                    if (trayIcon.ContextMenuStrip.Items[i] is ToolStripSeparator)
+                    {
+                        separatorIndex = i;
+                        break;
+                    }
+                }
+
+                if (separatorIndex != -1)
+                {
+                    trayIcon.ContextMenuStrip.Items.Insert(separatorIndex, horizontalLineMenu);
+                }
+                else
+                {
+                    trayIcon.ContextMenuStrip.Items.Add(horizontalLineMenu);
+                }
             }
         }
 
@@ -410,7 +460,7 @@ namespace Line
             var item = new ToolStripMenuItem(text, null, (s, e) => {
                 ChangeLineThickness(thickness);
             });
-            item.Checked = (thickness == lineWidth);
+            item.Checked = (thickness == lineHeight);
             parent.DropDownItems.Add(item);
         }
 
@@ -450,7 +500,7 @@ namespace Line
                     // 尝试注册热键
                     try
                     {
-                        Keys key = Keys.F1 + index;
+                        Keys key = Keys.D1 + index;
                         bool onSuccess = RegisterHotKey(this.Handle, BASE_HOTKEY_ID_ON + index, MOD_CONTROL, (int)key);
                         bool offSuccess = RegisterHotKey(this.Handle, BASE_HOTKEY_ID_OFF + index, MOD_CONTROL | MOD_SHIFT, (int)key);
 
@@ -460,7 +510,7 @@ namespace Line
                         }
                         else
                         {
-                            MessageBox.Show($"热键 Ctrl+F{index + 1} 注册失败，可能已被其他程序占用。", "警告", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                            MessageBox.Show($"热键 Ctrl+{index + 1} 注册失败，可能已被其他程序占用。", "警告", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                         }
                     }
                     catch (Exception ex)
@@ -474,11 +524,14 @@ namespace Line
                     UnregisterHotkeyPair(index);
                     hotkeyEnabled[index] = false;
                     
-                    // 如果有对应的竖线，则移除它
-                    if (verticalLines.ContainsKey(index))
+                    // 如果有对应的横线，则移除它
+                    if (horizontalLines.ContainsKey(index))
                     {
-                        verticalLines[index].Close();
-                        verticalLines.Remove(index);
+                        foreach (var line in horizontalLines[index])
+                        {
+                            line.Close();
+                        }
+                        horizontalLines.Remove(index);
                         lineStates[index] = false;
                     }
                 }
@@ -494,7 +547,7 @@ namespace Line
 
             foreach (ToolStripItem item in trayIcon.ContextMenuStrip.Items)
             {
-                if (item is ToolStripMenuItem menuItem && menuItem.Text == "持续竖线")
+                if (item is ToolStripMenuItem menuItem && menuItem.Text == "持续横线")
                 {
                     var hotkeyMenu = menuItem.DropDownItems[0] as ToolStripMenuItem;
                     if (hotkeyMenu != null)
@@ -514,11 +567,18 @@ namespace Line
 
         private void ChangeLineThickness(int thickness)
         {
-            lineWidth = thickness;
-            foreach (var line in verticalLines.Values)
+            lineHeight = thickness;
+            
+            // 更新所有横线的高度
+            foreach (var linesList in horizontalLines.Values)
             {
-                line.Width = thickness;
+                foreach (var line in linesList)
+                {
+                    line.Height = lineHeight;
+                }
             }
+            
+            // 更新菜单项选中状态
             UpdateThicknessMenuCheckedState();
             SaveConfig();
         }
@@ -526,10 +586,17 @@ namespace Line
         private void ChangeLineColor(Color color)
         {
             lineColor = color;
-            foreach (var line in verticalLines.Values)
+            
+            // 更新所有横线的颜色
+            foreach (var linesList in horizontalLines.Values)
             {
-                line.BackColor = color;
+                foreach (var line in linesList)
+                {
+                    line.BackColor = lineColor;
+                }
             }
+            
+            // 更新菜单项选中状态
             UpdateColorMenuCheckedState();
             SaveConfig();
         }
@@ -537,26 +604,32 @@ namespace Line
         private void ChangeLineTransparency(int value)
         {
             lineOpacity = value;
-            double opacity = value / 100.0;
-            foreach (var line in verticalLines.Values)
+            
+            // 更新所有横线的透明度
+            foreach (var linesList in horizontalLines.Values)
             {
-                line.Opacity = opacity;
+                foreach (var line in linesList)
+                {
+                    line.Opacity = lineOpacity / 100.0;
+                }
             }
+            
+            // 更新菜单项选中状态
             UpdateTransparencyMenuCheckedState();
             SaveConfig();
         }
 
         private void UpdateThicknessMenuCheckedState()
         {
-            UpdateMenuCheckedState("竖线粗细", item => {
-                string thicknessStr = lineWidth.ToString();
+            UpdateMenuCheckedState("横线粗细", item => {
+                string thicknessStr = lineHeight.ToString();
                 return item.Text.Contains(thicknessStr);
             });
         }
 
         private void UpdateColorMenuCheckedState()
         {
-            UpdateMenuCheckedState("竖线颜色", item => {
+            UpdateMenuCheckedState("横线颜色", item => {
                 if (item.Image is Bitmap bmp)
                 {
                     try
@@ -577,7 +650,7 @@ namespace Line
 
         private void UpdateTransparencyMenuCheckedState()
         {
-            UpdateMenuCheckedState("竖线透明度", item => item.Text.Contains(lineOpacity.ToString() + "%"));
+            UpdateMenuCheckedState("横线透明度", item => item.Text.Contains(lineOpacity.ToString() + "%"));
         }
 
         private void UpdateMenuCheckedState(string menuName, Func<ToolStripMenuItem, bool> checkCondition)
@@ -586,9 +659,9 @@ namespace Line
 
             foreach (ToolStripItem item in trayIcon.ContextMenuStrip.Items)
             {
-                if (item is ToolStripMenuItem verticalMenu && verticalMenu.Text == "持续竖线")
+                if (item is ToolStripMenuItem horizontalMenu && horizontalMenu.Text == "持续横线")
                 {
-                    foreach (ToolStripItem subItem in verticalMenu.DropDownItems)
+                    foreach (ToolStripItem subItem in horizontalMenu.DropDownItems)
                     {
                         if (subItem is ToolStripMenuItem targetMenu && targetMenu.Text == menuName)
                         {
@@ -613,83 +686,149 @@ namespace Line
             {
                 int hotkeyId = m.WParam.ToInt32();
                 
-                // 处理开启热键 (Ctrl+F1-F4)
+                // 处理开启热键 (Ctrl+1-4)
                 if (hotkeyId >= BASE_HOTKEY_ID_ON && hotkeyId < BASE_HOTKEY_ID_ON + 4)
                 {
                     int lineIndex = hotkeyId - BASE_HOTKEY_ID_ON;
                     if (hotkeyEnabled[lineIndex])
                     {
-                        ShowVerticalLine(lineIndex);
+                        ShowHorizontalLine(lineIndex);
                     }
                 }
-                // 处理关闭热键 (Ctrl+Shift+F1-F4)
+                // 处理关闭热键 (Ctrl+Shift+1-4)
                 else if (hotkeyId >= BASE_HOTKEY_ID_OFF && hotkeyId < BASE_HOTKEY_ID_OFF + 4)
                 {
                     int lineIndex = hotkeyId - BASE_HOTKEY_ID_OFF;
                     if (hotkeyEnabled[lineIndex])
                     {
-                        HideVerticalLine(lineIndex);
+                        HideHorizontalLine(lineIndex);
                     }
                 }
             }
             base.WndProc(ref m);
         }
 
-        private void ShowVerticalLine(int index)
+        private void ShowHorizontalLine(int index)
         {
-            Screen currentScreen = Screen.FromPoint(Cursor.Position);
+            Point mousePos = Cursor.Position;
             
-            // 如果这条线已经存在，就更新它的位置
-            if (verticalLines.ContainsKey(index))
+            if (showOnAllScreens)
             {
-                DraggableVerticalLine line = verticalLines[index];
-                line.Location = new Point(Cursor.Position.X - (lineWidth / 2), currentScreen.Bounds.Y);
+                // 在所有屏幕显示横线
+                Screen mouseScreen = Screen.FromPoint(mousePos);
+                int relativeY = mousePos.Y - mouseScreen.Bounds.Y;
                 
-                // 确保现有线条保持置顶
-                if (line.Handle != IntPtr.Zero)
+                // 如果这条线已经存在，先关闭所有相关的线
+                if (horizontalLines.ContainsKey(index))
                 {
-                    line.TopMost = true;
-                    SetWindowPos(line.Handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+                    foreach (var line in horizontalLines[index])
+                    {
+                        line.Close();
+                    }
+                    horizontalLines.Remove(index);
                 }
+                
+                List<DraggableHorizontalLine> firstLines = new List<DraggableHorizontalLine>();
+                // 为每个屏幕创建横线
+                foreach (Screen screen in Screen.AllScreens)
+                {
+                    int lineY = screen.Bounds.Y + relativeY;
+                    // 确保线条不超出屏幕边界
+                    if (lineY < screen.Bounds.Y) lineY = screen.Bounds.Y;
+                    if (lineY > screen.Bounds.Bottom - lineHeight) lineY = screen.Bounds.Bottom - lineHeight;
+                    
+                    DraggableHorizontalLine line = new DraggableHorizontalLine(
+                        screen.Bounds.Width,
+                        lineHeight,
+                        lineColor,
+                        lineOpacity / 100.0,
+                        mouseClickThrough
+                    )
+                    {
+                        TopMost = true  // 创建时就设置为置顶
+                    };
+
+                    line.Location = new Point(screen.Bounds.X, lineY);
+                    line.Show();
+                    line.Height = lineHeight; // 重置高度以绕过DPI缩放
+                    
+                    // 强制使用Windows API置顶
+                    if (line.Handle != IntPtr.Zero)
+                    {
+                        SetWindowPos(line.Handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+                        BringWindowToTop(line.Handle);
+                    }
+                    
+                    firstLines.Add(line);
+                }
+                
+                // 保存第一个屏幕的线条引用（用于管理）
+                horizontalLines[index] = firstLines;
             }
             else
             {
-                // 创建新的竖线
-                DraggableVerticalLine line = new DraggableVerticalLine(lineWidth, currentScreen.Bounds.Height, lineColor, lineOpacity / 100.0, mouseClickThrough)
-                {
-                    StartPosition = FormStartPosition.Manual,
-                    Location = new Point(
-                        Cursor.Position.X - (lineWidth / 2),
-                        currentScreen.Bounds.Y
-                    ),
-                    TopMost = true  // 创建时就设置为置顶
-                };
-
-                line.Location = new Point(Cursor.Position.X - (lineWidth / 2), currentScreen.Bounds.Y);
-                line.Show();
-
-                // → 关键：Show() 后立刻重置 Width，绕过 DPI 放大
-                line.Width = lineWidth;
+                // 只在鼠标所在屏幕显示横线
+                Screen currentScreen = Screen.FromPoint(mousePos);
                 
-                // 强制使用Windows API置顶
-                if (line.Handle != IntPtr.Zero)
+                // 如果这条线已经存在，就更新它的位置
+                if (horizontalLines.ContainsKey(index))
                 {
-                    SetWindowPos(line.Handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
-                    BringWindowToTop(line.Handle);
+                    foreach (var line in horizontalLines[index])
+                    {
+                        line.Location = new Point(currentScreen.Bounds.X, mousePos.Y);
+                        
+                        // 确保现有线条保持置顶
+                        if (line.Handle != IntPtr.Zero)
+                        {
+                            line.TopMost = true;
+                            SetWindowPos(line.Handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+                        }
+                    }
                 }
+                else
+                {
+                    // 创建新的横线 - 单屏幕模式只创建一条线
+                    List<DraggableHorizontalLine> newLines = new List<DraggableHorizontalLine>();
+                    
+                    DraggableHorizontalLine line = new DraggableHorizontalLine(
+                        currentScreen.Bounds.Width,
+                        lineHeight,
+                        lineColor,
+                        lineOpacity / 100.0,
+                        mouseClickThrough
+                    )
+                    {
+                        TopMost = true  // 创建时就设置为置顶
+                    };
 
-                verticalLines[index] = line;
+                    line.Location = new Point(currentScreen.Bounds.X, mousePos.Y);
+                    line.Show();
+                    line.Height = lineHeight; // 重置高度以绕过DPI缩放
+                    
+                    // 强制使用Windows API置顶
+                    if (line.Handle != IntPtr.Zero)
+                    {
+                        SetWindowPos(line.Handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+                        BringWindowToTop(line.Handle);
+                    }
+                    
+                    newLines.Add(line);
+                    horizontalLines[index] = newLines;
+                }
             }
 
             lineStates[index] = true;
         }
 
-        private void HideVerticalLine(int index)
+        private void HideHorizontalLine(int index)
         {
-            if (verticalLines.ContainsKey(index))
+            if (horizontalLines.ContainsKey(index))
             {
-                verticalLines[index].Close();
-                verticalLines.Remove(index);
+                foreach (var line in horizontalLines[index])
+                {
+                    line.Close();
+                }
+                horizontalLines.Remove(index);
                 lineStates[index] = false;
             }
         }
@@ -705,105 +844,123 @@ namespace Line
                 }
             }
 
-            // 关闭所有竖线 - 创建副本避免集合修改异常
-            var linesToClose = new List<DraggableVerticalLine>(verticalLines.Values);
-            foreach (var line in linesToClose)
+            // 关闭所有横线 - 创建副本避免集合修改异常
+            var linesToClose = new List<List<DraggableHorizontalLine>>(horizontalLines.Values);
+            foreach (var lines in linesToClose)
             {
-                try
+                foreach (var line in lines)
                 {
-                    if (line != null && !line.IsDisposed)
+                    try
                     {
-                        line.Close();
+                        if (line != null && !line.IsDisposed)
+                        {
+                            line.Close();
+                        }
+                    }
+                    catch (Exception)
+                    {
+                        // 忽略关闭时的异常
                     }
                 }
-                catch (Exception)
-                {
-                    // 忽略关闭时的异常
-                }
             }
-            verticalLines.Clear();
+            horizontalLines.Clear();
             lineStates.Clear();
 
             base.OnFormClosing(e);
         }
 
         /// <summary>
-        /// 显示所有竖线
+        /// 显示所有横线
         /// </summary>
         public void ShowAllLines()
         {
-            foreach (var line in verticalLines.Values)
+            foreach (var lines in horizontalLines.Values)
             {
-                if (!line.Visible)
+                foreach (var line in lines)
                 {
-                    line.Show();
+                    if (!line.Visible)
+                    {
+                        line.Show();
+                    }
                 }
             }
         }
 
         /// <summary>
-        /// 隐藏所有竖线
+        /// 隐藏所有横线
         /// </summary>
         public void HideAllLines()
         {
-            foreach (var line in verticalLines.Values)
+            foreach (var lines in horizontalLines.Values)
             {
-                if (line.Visible)
+                foreach (var line in lines)
                 {
-                    line.Hide();
+                    if (line.Visible)
+                    {
+                        line.Hide();
+                    }
                 }
             }
         }
 
         /// <summary>
-        /// 关闭所有竖线（彻底移除）
+        /// 关闭所有横线（彻底移除）
         /// </summary>
         public void CloseAllLines()
         {
-            var linesToClose = new List<int>(verticalLines.Keys);
+            var linesToClose = new List<int>(horizontalLines.Keys);
             foreach (int index in linesToClose)
             {
-                if (verticalLines.ContainsKey(index))
+                if (horizontalLines.ContainsKey(index))
                 {
-                    verticalLines[index].Close();
-                    verticalLines.Remove(index);
+                    foreach (var line in horizontalLines[index])
+                    {
+                        line.Close();
+                    }
+                    horizontalLines.Remove(index);
                     lineStates[index] = false;
                 }
             }
         }
 
         /// <summary>
-        /// 重新置顶所有竖线
+        /// 重新置顶所有横线
         /// </summary>
         public void BringAllLinesToTop()
         {
-            foreach (var line in verticalLines.Values)
+            foreach (var lines in horizontalLines.Values)
             {
-                if (line != null && !line.IsDisposed)
+                foreach (var line in lines)
                 {
-                    line.TopMost = false;
-                    line.TopMost = true;
-                    line.BringToFront();
+                    if (line != null && !line.IsDisposed)
+                    {
+                        line.TopMost = false;
+                        line.TopMost = true;
+                        line.BringToFront();
+                    }
                 }
             }
         }
 
         /// <summary>
-        /// 确保所有竖线保持置顶状态（用于持续置顶功能） - 与其他置顶程序抢夺置顶权
+        /// 确保所有横线保持置顶状态（用于持续置顶功能） - 与其他置顶程序抢夺置顶权
         /// </summary>
         public void EnsureTopmost()
         {
-            foreach (var line in verticalLines.Values)
+            foreach (var lines in horizontalLines.Values)
             {
-                if (line != null && !line.IsDisposed && line.Visible && line.Handle != IntPtr.Zero)
+                foreach (var line in lines)
                 {
-                    // 强制重新设置置顶状态，抢夺置顶权
-                    line.TopMost = false;  // 先取消置顶
-                    line.TopMost = true;   // 再重新置顶，抢夺置顶权
-                    
-                    // 使用Windows API强制置顶并显示
-                    SetWindowPos(line.Handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
-                    BringWindowToTop(line.Handle);
+                    if (line != null && !line.IsDisposed && line.Visible && line.Handle != IntPtr.Zero)
+                    {
+                        // 强制重新设置置顶状态，抢夺置顶权
+                        line.TopMost = false;  // 先取消置顶
+                        line.TopMost = true;   // 再重新置顶，抢夺置顶权
+                        
+                        // 使用Windows API强制置顶并显示
+                        SetWindowPos(line.Handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+                        BringWindowToTop(line.Handle);
+                    }
                 }
             }
         }
@@ -825,23 +982,25 @@ namespace Line
                     }
                     else
                     {
-                        hotkeyEnabled = new bool[] { true, false, false, false };
+                        hotkeyEnabled = new bool[] { true, true, false, false };
                     }
 
-                    lineWidth = config.LineWidth;
+                    lineHeight = config.LineHeight;
                     lineColor = ColorTranslator.FromHtml(config.LineColor);
                     lineOpacity = config.LineOpacity;
                     mouseClickThrough = config.MouseClickThrough;
+                    showOnAllScreens = config.ShowOnAllScreens;
                 }
             }
             catch (Exception)
             {
                 // 如果加载失败，使用默认值
-                hotkeyEnabled = new bool[] { true, false, false, false };
-                lineWidth = 1;
-                lineColor = Color.Blue;
+                hotkeyEnabled = new bool[] { true, true, false, false };
+                lineHeight = 1;
+                lineColor = Color.Green;
                 lineOpacity = 100;
                 mouseClickThrough = true;
+                showOnAllScreens = false;
             }
         }
 
@@ -853,10 +1012,11 @@ namespace Line
                 var config = new Config
                 {
                     HotkeyEnabled = hotkeyEnabled,
-                    LineWidth = lineWidth,
+                    LineHeight = lineHeight,
                     LineColor = ColorTranslator.ToHtml(lineColor),
                     LineOpacity = lineOpacity,
-                    MouseClickThrough = mouseClickThrough
+                    MouseClickThrough = mouseClickThrough,
+                    ShowOnAllScreens = showOnAllScreens
                 };
 
                 string jsonString = JsonSerializer.Serialize(config, new JsonSerializerOptions
@@ -868,7 +1028,7 @@ namespace Line
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"保存竖线配置时出错: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show($"保存横线配置时出错: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
     }
