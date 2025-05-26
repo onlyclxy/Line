@@ -18,7 +18,14 @@ namespace Line
 
         // Windows API for mouse click-through
         private const int WS_EX_TRANSPARENT = 0x20;
+        private const int WS_EX_LAYERED = 0x80000;
+        private const int WS_EX_NOACTIVATE = 0x08000000;
         private const int GWL_EXSTYLE = (-20);
+
+        // 新增：窗口消息常量
+        private const int WM_SETCURSOR = 0x0020;
+        private const int WM_MOUSEACTIVATE = 0x0021;
+        private const int MA_NOACTIVATE = 3;
 
         [DllImport("user32.dll")]
         private static extern int GetWindowLong(IntPtr hwnd, int index);
@@ -41,7 +48,7 @@ namespace Line
             
             mouseClickThrough = clickThrough;
             
-            // 如果不是鼠标穿透模式，添加拖拽事件
+            // 如果不是鼠标穿透模式，添加拖拽事件和设置光标
             if (!mouseClickThrough)
             {
                 this.MouseDown += OnMouseDown;
@@ -51,10 +58,25 @@ namespace Line
             }
         }
 
+        // 重写CreateParams，在创建窗口时就设置所有必要的扩展样式
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                var cp = base.CreateParams;
+                // 分层 + 点透 + 不激活
+                cp.ExStyle |= WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE;
+                return cp;
+            }
+        }
+
         protected override void OnHandleCreated(EventArgs e)
         {
             base.OnHandleCreated(e);
-            SetClickThrough(mouseClickThrough);
+            // 强制保证都加上去
+            int ex = GetWindowLong(this.Handle, GWL_EXSTYLE);
+            ex |= WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE;
+            SetWindowLong(this.Handle, GWL_EXSTYLE, ex);
         }
 
         public void SetClickThrough(bool enable)
@@ -64,16 +86,15 @@ namespace Line
             {
                 if (enable)
                 {
-                    int exStyle = GetWindowLong(this.Handle, GWL_EXSTYLE);
-                    SetWindowLong(this.Handle, GWL_EXSTYLE, exStyle | WS_EX_TRANSPARENT);
-                    this.Cursor = Cursors.Default;
-                    // 移除拖拽事件
+                    // 启用穿透模式：移除拖拽事件，不设置光标
                     this.MouseDown -= OnMouseDown;
                     this.MouseMove -= OnMouseMove;
                     this.MouseUp -= OnMouseUp;
+                    // 不再设置 this.Cursor，让系统决定光标形状
                 }
                 else
                 {
+                    // 禁用穿透模式：移除透明样式，添加拖拽事件
                     int exStyle = GetWindowLong(this.Handle, GWL_EXSTYLE);
                     SetWindowLong(this.Handle, GWL_EXSTYLE, exStyle & ~WS_EX_TRANSPARENT);
                     this.Cursor = Cursors.SizeWE;
@@ -86,6 +107,26 @@ namespace Line
                     this.MouseUp += OnMouseUp;
                 }
             }
+        }
+
+        // 拦截窗口消息，解决光标和激活问题
+        protected override void WndProc(ref Message m)
+        {
+            if (mouseClickThrough)
+            {
+                if (m.Msg == WM_MOUSEACTIVATE)
+                {
+                    // 不激活自己，直接交给下面窗口
+                    m.Result = new IntPtr(MA_NOACTIVATE);
+                    return;
+                }
+                if (m.Msg == WM_SETCURSOR)
+                {
+                    // 不处理，让系统去给下面窗口设光标
+                    return;
+                }
+            }
+            base.WndProc(ref m);
         }
 
         private void OnMouseDown(object sender, MouseEventArgs e)

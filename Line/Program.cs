@@ -114,6 +114,72 @@ namespace Line
         }
     }
 
+    // 自定义的瞬时横线窗体类，用于其他屏幕的线条显示
+    public class TemporaryLineForm : Form
+    {
+        // Windows API常量
+        private const int WS_EX_TRANSPARENT = 0x20;
+        private const int WS_EX_LAYERED = 0x80000;
+        private const int WS_EX_NOACTIVATE = 0x08000000;
+        private const int GWL_EXSTYLE = (-20);
+        private const int WM_SETCURSOR = 0x0020;
+        private const int WM_MOUSEACTIVATE = 0x0021;
+        private const int MA_NOACTIVATE = 3;
+
+        [DllImport("user32.dll")]
+        private static extern int GetWindowLong(IntPtr hwnd, int index);
+
+        [DllImport("user32.dll")]
+        private static extern int SetWindowLong(IntPtr hwnd, int index, int newStyle);
+
+        public TemporaryLineForm()
+        {
+            this.FormBorderStyle = FormBorderStyle.None;
+            this.ShowInTaskbar = false;
+            this.TopMost = true;
+            this.TransparencyKey = Color.Black;
+            this.AutoScaleMode = AutoScaleMode.None;
+        }
+
+        // 重写CreateParams，在创建窗口时就设置所有必要的扩展样式
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                var cp = base.CreateParams;
+                // 分层 + 点透 + 不激活
+                cp.ExStyle |= WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE;
+                return cp;
+            }
+        }
+
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            // 强制保证都加上去
+            int ex = GetWindowLong(this.Handle, GWL_EXSTYLE);
+            ex |= WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE;
+            SetWindowLong(this.Handle, GWL_EXSTYLE, ex);
+        }
+
+        // 拦截窗口消息，解决光标和激活问题
+        protected override void WndProc(ref Message m)
+        {
+            if (m.Msg == WM_MOUSEACTIVATE)
+            {
+                // 不激活自己，直接交给下面窗口
+                m.Result = new IntPtr(MA_NOACTIVATE);
+                return;
+            }
+            if (m.Msg == WM_SETCURSOR)
+            {
+                // 不处理，让系统去给下面窗口设光标
+                return;
+            }
+            base.WndProc(ref m);
+        }
+    }
+
     public class LineForm : Form
     {
         private System.Windows.Forms.Timer fadeTimer;
@@ -236,7 +302,14 @@ namespace Line
 
         // 用于设置鼠标穿透的Windows API
         private const int WS_EX_TRANSPARENT = 0x20;
+        private const int WS_EX_LAYERED = 0x80000;
+        private const int WS_EX_NOACTIVATE = 0x08000000;
         private const int GWL_EXSTYLE = (-20);
+
+        // 新增：窗口消息常量
+        private const int WM_SETCURSOR = 0x0020;
+        private const int WM_MOUSEACTIVATE = 0x0021;
+        private const int MA_NOACTIVATE = 3;
 
         [DllImport("user32.dll")]
         private static extern int GetWindowLong(IntPtr hwnd, int index);
@@ -318,6 +391,18 @@ namespace Line
             RegisterCurrentHotKey();
         }
 
+        // 重写CreateParams，在创建窗口时就设置所有必要的扩展样式
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                var cp = base.CreateParams;
+                // 分层 + 点透 + 不激活
+                cp.ExStyle |= WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE;
+                return cp;
+            }
+        }
+
         /// <summary>
         /// 设置窗体的鼠标穿透属性
         /// </summary>
@@ -325,8 +410,10 @@ namespace Line
         {
             if (form.Handle != IntPtr.Zero)
             {
-                int exStyle = GetWindowLong(form.Handle, GWL_EXSTYLE);
-                SetWindowLong(form.Handle, GWL_EXSTYLE, exStyle | WS_EX_TRANSPARENT);
+                // 强制保证都加上去
+                int ex = GetWindowLong(form.Handle, GWL_EXSTYLE);
+                ex |= WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE;
+                SetWindowLong(form.Handle, GWL_EXSTYLE, ex);
             }
         }
 
@@ -1041,24 +1128,12 @@ namespace Line
             {
                 if (screen.Primary) continue;
 
-                Form lineForm = new Form
+                TemporaryLineForm lineForm = new TemporaryLineForm
                 {
-                    FormBorderStyle = FormBorderStyle.None,
-                    ShowInTaskbar = false,
-                    TopMost = true,
                     BackColor = lineColor,
-                    TransparencyKey = Color.Black,
                     Opacity = 0,
                     Width = screen.Bounds.Width,
                     Height = lineHeight  // 使用设定的线条高度
-                };
-                
-                // 为每个线条窗体设置鼠标穿透
-                lineForm.HandleCreated += (s, args) => {
-                    if (s is Form form)
-                    {
-                        SetClickThrough(form);
-                    }
                 };
                 
                 screenLines[screen] = lineForm;
@@ -1757,13 +1832,28 @@ namespace Line
         /// </summary>
         protected override void WndProc(ref Message m)
         {
+            // 拦截窗口消息，解决光标和激活问题
+            if (m.Msg == WM_MOUSEACTIVATE)
+            {
+                // 不激活自己，直接交给下面窗口
+                m.Result = new IntPtr(MA_NOACTIVATE);
+                return;
+            }
+            if (m.Msg == WM_SETCURSOR)
+            {
+                // 不处理，让系统去给下面窗口设光标
+                return;
+            }
+            
             // 处理热键消息
             if (m.Msg == WM_HOTKEY && m.WParam.ToInt32() == currentHotKeyId)
             {
                 // 在显示线条前先重置状态
                 ResetLineState();
                 ShowLine();
+                return;
             }
+            
             base.WndProc(ref m);
         }
     }
