@@ -849,6 +849,34 @@ namespace Line
             }
         }
 
+        /// <summary>
+        /// 启用所有热键
+        /// </summary>
+        public void EnableAllHotkeys()
+        {
+            for (int i = 0; i < hotkeyEnabled.Length; i++)
+            {
+                if (hotkeyEnabled[i])
+                {
+                    RegisterHotkeyPair(i);
+                }
+            }
+        }
+
+        /// <summary>
+        /// 禁用所有热键
+        /// </summary>
+        public void DisableAllHotkeys()
+        {
+            for (int i = 0; i < hotkeyEnabled.Length; i++)
+            {
+                if (hotkeyEnabled[i])
+                {
+                    UnregisterHotkeyPair(i);
+                }
+            }
+        }
+
         // 加载配置
         private void LoadConfig()
         {

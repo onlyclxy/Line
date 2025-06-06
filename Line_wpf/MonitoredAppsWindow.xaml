@@ -1,0 +1,53 @@
+<Window x:Class="Line_wpf.MonitoredAppsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="管理监控程序" 
+        Width="600" Height="450"
+        WindowStartupLocation="CenterScreen"
+        ResizeMode="NoResize">
+    <Grid Margin="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        
+        <!-- 数据网格 -->
+        <DataGrid x:Name="dataGrid" Grid.Row="0" 
+                  Margin="0,0,0,12"
+                  AutoGenerateColumns="False"
+                  CanUserAddRows="False"
+                  CanUserDeleteRows="False"
+                  CanUserResizeRows="False"
+                  CanUserReorderColumns="False"
+                  SelectionMode="Single"
+                  HeadersVisibility="Column"
+                  GridLinesVisibility="All">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="程序标题" 
+                                    Binding="{Binding Name}" 
+                                    Width="460" 
+                                    IsReadOnly="True"/>
+                <DataGridCheckBoxColumn Header="启用" 
+                                        Binding="{Binding IsEnabled}" 
+                                        Width="80"/>
+            </DataGrid.Columns>
+        </DataGrid>
+        
+        <!-- 操作按钮行 -->
+        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,12">
+            <Button x:Name="addButton" Content="添加程序" Width="80" Height="30" Margin="0,0,8,0" Click="AddButton_Click"/>
+            <Button x:Name="deleteButton" Content="删除选中" Width="80" Height="30" Margin="0,0,8,0" Click="DeleteButton_Click"/>
+            <Button x:Name="windowPickerButton" Content="🎯 拖拽拾取" Width="90" Height="30" Margin="0,0,8,0" 
+                    MouseDown="WindowPickerButton_MouseDown" MouseUp="WindowPickerButton_MouseUp"/>
+        </StackPanel>
+        
+        <!-- 确认按钮行 -->
+        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button x:Name="saveButton" Content="保存" Width="75" Height="30" Margin="0,0,8,0" 
+                    Click="SaveButton_Click" IsDefault="True"/>
+            <Button x:Name="cancelButton" Content="取消" Width="75" Height="30" 
+                    Click="CancelButton_Click" IsCancel="True"/>
+        </StackPanel>
+    </Grid>
+</Window> 

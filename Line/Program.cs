@@ -192,6 +192,7 @@ namespace Line
         private Dictionary<Screen, Form> screenLines = new Dictionary<Screen, Form>();
         private VerticalLineForm verticalLineForm;  // 添加竖线窗体实例
         private HorizontalLineForm horizontalLineForm;  // 添加横线窗体实例
+        private BoundingBoxForm boundingBoxForm;  // 添加包围框窗体实例
         
         // 全局显示/隐藏状态（不保存到配置文件，每次启动都是显示状态）
         private bool allPersistentLinesVisible = true;
@@ -279,6 +280,9 @@ namespace Line
             "config.json"
         );
 
+        // 添加全局快捷键控制开关
+        private bool globalHotkeysDisabled = false;
+
         // 配置类
         private class Config
         {
@@ -292,6 +296,7 @@ namespace Line
             public int TopmostStrategy { get; set; } // 新增：置顶策略
             public int TimerInterval { get; set; } // 新增：定时器间隔
             public List<MonitoredApp> MonitoredApplications { get; set; } // 新增：监控的应用程序列表
+            public bool GlobalHotkeysDisabled { get; set; }
         }
 
         [DllImport("user32.dll")]
@@ -360,6 +365,9 @@ namespace Line
 
             // 初始化横线窗体
             horizontalLineForm = new HorizontalLineForm(trayIcon);
+
+            // 初始化包围框窗体
+            boundingBoxForm = new BoundingBoxForm(trayIcon);
 
             // 设置定时器用于淡出效果
             fadeTimer = new System.Windows.Forms.Timer();
@@ -456,6 +464,8 @@ namespace Line
                     {
                         monitoredApplications = config.MonitoredApplications;
                     }
+
+                    globalHotkeysDisabled = config.GlobalHotkeysDisabled;
                 }
             }
             catch (Exception ex)
@@ -471,6 +481,7 @@ namespace Line
                 currentTopmostStrategy = TopmostStrategy.ForceTimer;
                 currentTimerInterval = 100;
                 monitoredApplications = new List<MonitoredApp> { new MonitoredApp("Paster - Snipaste", true), new MonitoredApp("PixPin", true) };
+                globalHotkeysDisabled = false;
             }
         }
 
@@ -490,7 +501,8 @@ namespace Line
                     PersistentTopmost = persistentTopmost,
                     TopmostStrategy = (int)currentTopmostStrategy, // 新增
                     TimerInterval = currentTimerInterval, // 新增
-                    MonitoredApplications = monitoredApplications // 新增
+                    MonitoredApplications = monitoredApplications, // 新增
+                    GlobalHotkeysDisabled = globalHotkeysDisabled,
                 };
 
                 string jsonString = JsonSerializer.Serialize(config, new JsonSerializerOptions
@@ -500,9 +512,9 @@ namespace Line
 
                 File.WriteAllText(configPath, jsonString);
             }
-            catch (Exception ex)
+            catch
             {
-                MessageBox.Show($"保存配置时出错: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show("保存配置时出错", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
@@ -542,7 +554,7 @@ namespace Line
                 // 创建右键菜单
                 ContextMenuStrip contextMenu = new ContextMenuStrip();
                 
-                // ===== 瞬时横线菜单组 =====
+                // 添加瞬时横线菜单组
                 ToolStripMenuItem temporaryHorizontalLineMenu = new ToolStripMenuItem("瞬时横线");
                 
                 // 显示模式菜单
@@ -645,15 +657,17 @@ namespace Line
                 temporaryHorizontalLineMenu.DropDownItems.Add(durationItem);
                 temporaryHorizontalLineMenu.DropDownItems.Add(hotKeyItem);
 
-                // 退出选项
-                ToolStripMenuItem exitItem = new ToolStripMenuItem("退出", null, (s, e) => {
-                    CleanupAndExit();
-                });
-
                 // 将所有主菜单项添加到上下文菜单
                 contextMenu.Items.Add(temporaryHorizontalLineMenu);
                 // 竖线菜单会在 verticalLineForm 中自动添加
                 contextMenu.Items.Add(new ToolStripSeparator());
+                
+                // 添加禁用快捷键菜单项到主菜单
+                var disableHotkeysItem = new ToolStripMenuItem("禁用快捷键", null, (s, e) => {
+                    ToggleGlobalHotkeys();
+                });
+                disableHotkeysItem.Checked = globalHotkeysDisabled;
+                contextMenu.Items.Add(disableHotkeysItem);
                 
                 // 添加显示/隐藏全部持续线条的菜单项
                 ToolStripMenuItem toggleAllLinesItem = new ToolStripMenuItem("隐藏全部持续线条", null, (s, e) => {
@@ -730,8 +744,10 @@ namespace Line
                 });
                 contextMenu.Items.Add(restartItem);
                 
-                contextMenu.Items.Add(new ToolStripSeparator());
-                
+                // 添加退出选项
+                ToolStripMenuItem exitItem = new ToolStripMenuItem("退出", null, (s, e) => {
+                    CleanupAndExit();
+                });
                 contextMenu.Items.Add(exitItem);
 
                 trayIcon.ContextMenuStrip = contextMenu;
@@ -754,9 +770,9 @@ namespace Line
                     }
                 };
             }
-            catch (Exception ex)
+            catch
             {
-                MessageBox.Show("初始化托盘图标失败: " + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show("初始化托盘图标失败", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
@@ -791,6 +807,12 @@ namespace Line
                     horizontalLineForm.Close();
                 }
 
+                // 关闭包围框窗体
+                if (boundingBoxForm != null)
+                {
+                    boundingBoxForm.Close();
+                }
+
                 // 彻底清理托盘图标
                 if (trayIcon != null)
                 {
@@ -800,7 +822,10 @@ namespace Line
                 }
 
                 // 注销热键
-                UnregisterHotKey(this.Handle, currentHotKeyId);
+                if (currentHotKey != Keys.None)
+                {
+                    UnregisterHotKey(this.Handle, currentHotKeyId);
+                }
 
                 // 安全地关闭其他窗体
                 var formsToClose = new List<Form>();
@@ -1049,20 +1074,35 @@ namespace Line
         {
             try
             {
-                // 先注销旧热键
-                UnregisterHotKey(this.Handle, currentHotKeyId);
-                
-                // 更改热键并重新注册
-                currentHotKey = newHotKey;
-                RegisterCurrentHotKey();
+                // 如果点击当前已绑定的热键，则解除绑定
+                if (newHotKey == currentHotKey)
+                {
+                    UnregisterHotKey(this.Handle, currentHotKeyId);
+                    currentHotKey = Keys.None;
+                }
+                else
+                {
+                    // 先注销旧热键
+                    if (currentHotKey != Keys.None)
+                    {
+                        UnregisterHotKey(this.Handle, currentHotKeyId);
+                    }
+                    
+                    // 更改热键并重新注册
+                    currentHotKey = newHotKey;
+                    if (!globalHotkeysDisabled)
+                    {
+                        RegisterCurrentHotKey();
+                    }
+                }
                 
                 // 更新菜单项选中状态
                 UpdateHotKeyMenuCheckedState();
                 SaveConfig();
             }
-            catch (Exception ex)
+            catch
             {
-                MessageBox.Show($"更改热键时发生错误: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show("更改热键时发生错误", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
@@ -1297,6 +1337,19 @@ namespace Line
                     horizontalLineForm.HideAllLines();
                 }
             }
+
+            // 控制包围框的显示/隐藏
+            if (boundingBoxForm != null)
+            {
+                if (allPersistentLinesVisible)
+                {
+                    boundingBoxForm.ShowAllLines();
+                }
+                else
+                {
+                    boundingBoxForm.HideAllLines();
+                }
+            }
             
             // 更新菜单项文本
             UpdateToggleMenuText();
@@ -1327,7 +1380,7 @@ namespace Line
         {
             // 显示确认对话框
             DialogResult result = MessageBox.Show(
-                "确定要关闭所有持续线条吗？\n\n这将关闭所有竖线和横线。",
+                "确定要关闭所有持续线条吗？\n\n这将关闭所有竖线、横线和包围框。",
                 "确认关闭",
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Question,
@@ -1348,6 +1401,12 @@ namespace Line
                     if (horizontalLineForm != null)
                     {
                         horizontalLineForm.CloseAllLines();
+                    }
+
+                    // 关闭所有包围框
+                    if (boundingBoxForm != null)
+                    {
+                        boundingBoxForm.CloseAllLines();
                     }
                     
                     // 更新全局显示状态
@@ -1380,6 +1439,12 @@ namespace Line
                 if (horizontalLineForm != null)
                 {
                     horizontalLineForm.BringAllLinesToTop();
+                }
+
+                // 重新置顶所有包围框
+                if (boundingBoxForm != null)
+                {
+                    boundingBoxForm.BringAllLinesToTop();
                 }
                 
                 // 重新置顶瞬时横线窗体
@@ -1660,6 +1725,12 @@ namespace Line
                 {
                     horizontalLineForm.EnsureTopmost();
                 }
+
+                // 强力抢夺包围框的置顶权
+                if (boundingBoxForm != null)
+                {
+                    boundingBoxForm.EnsureTopmost();
+                }
             }
             catch (Exception)
             {
@@ -1673,6 +1744,9 @@ namespace Line
         private void TopmostTimer_Tick(object sender, EventArgs e)
         {
             if (!persistentTopmost || currentTopmostStrategy != TopmostStrategy.ForceTimer) return;
+            
+            // 如果菜单正在显示，跳过置顶操作以避免干扰菜单
+            if (IsMenuVisible()) return;
             
             PerformTopmostOperation();
         }
@@ -1855,6 +1929,76 @@ namespace Line
             }
             
             base.WndProc(ref m);
+        }
+
+        /// <summary>
+        /// 切换全局快捷键开关
+        /// </summary>
+        private void ToggleGlobalHotkeys()
+        {
+            globalHotkeysDisabled = !globalHotkeysDisabled;
+
+            if (!globalHotkeysDisabled)
+            {
+                // 重新注册之前启用的热键
+                if (currentHotKey != Keys.None)
+                {
+                    RegisterCurrentHotKey();
+                }
+                
+                // 通知竖线窗体重新启用热键
+                if (verticalLineForm != null)
+                {
+                    verticalLineForm.EnableAllHotkeys();
+                }
+                
+                // 通知横线窗体重新启用热键
+                if (horizontalLineForm != null)
+                {
+                    horizontalLineForm.EnableAllHotkeys();
+                }
+            }
+            else
+            {
+                // 注销所有热键
+                if (currentHotKey != Keys.None)
+                {
+                    UnregisterHotKey(this.Handle, currentHotKeyId);
+                }
+                
+                // 通知竖线窗体禁用热键
+                if (verticalLineForm != null)
+                {
+                    verticalLineForm.DisableAllHotkeys();
+                }
+                
+                // 通知横线窗体禁用热键
+                if (horizontalLineForm != null)
+                {
+                    horizontalLineForm.DisableAllHotkeys();
+                }
+            }
+
+            // 更新菜单项选中状态
+            UpdateGlobalHotkeyMenuCheckedState();
+            SaveConfig();
+        }
+
+        /// <summary>
+        /// 更新全局快捷键菜单的选中状态
+        /// </summary>
+        private void UpdateGlobalHotkeyMenuCheckedState()
+        {
+            if (trayIcon?.ContextMenuStrip == null) return;
+
+            foreach (ToolStripItem item in trayIcon.ContextMenuStrip.Items)
+            {
+                if (item is ToolStripMenuItem menuItem && menuItem.Text == "禁用快捷键")
+                {
+                    menuItem.Checked = globalHotkeysDisabled;
+                    break;
+                }
+            }
         }
     }
 }
