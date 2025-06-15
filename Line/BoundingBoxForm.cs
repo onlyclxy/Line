@@ -636,7 +636,10 @@ namespace Line
 
         private void ShowBoundingBox()
         {
-            Screen currentScreen = Screen.FromPoint(Cursor.Position);
+            // Use the screen that contains the default bounds rather than the
+            // current cursor position. This ensures the bounding box and guide
+            // lines are created on the same monitor.
+            Screen targetScreen = Screen.FromRectangle(defaultBounds);
             
             // 如果已存在，先隐藏
             if (boundingBox != null) HideBoundingBox();
@@ -644,15 +647,15 @@ namespace Line
             // 计算包围框位置，确保在当前屏幕内
             Rectangle bounds = defaultBounds;
             
-            // 如果默认位置超出当前屏幕，调整位置
-            if (bounds.Right > currentScreen.Bounds.Right)
-                bounds.X = currentScreen.Bounds.Right - bounds.Width;
-            if (bounds.Bottom > currentScreen.Bounds.Bottom)
-                bounds.Y = currentScreen.Bounds.Bottom - bounds.Height;
-            if (bounds.X < currentScreen.Bounds.X)
-                bounds.X = currentScreen.Bounds.X;
-            if (bounds.Y < currentScreen.Bounds.Y)
-                bounds.Y = currentScreen.Bounds.Y;
+            // 如果默认位置超出目标屏幕，调整位置
+            if (bounds.Right > targetScreen.Bounds.Right)
+                bounds.X = targetScreen.Bounds.Right - bounds.Width;
+            if (bounds.Bottom > targetScreen.Bounds.Bottom)
+                bounds.Y = targetScreen.Bounds.Bottom - bounds.Height;
+            if (bounds.X < targetScreen.Bounds.X)
+                bounds.X = targetScreen.Bounds.X;
+            if (bounds.Y < targetScreen.Bounds.Y)
+                bounds.Y = targetScreen.Bounds.Y;
 
             // 确保最小大小
             if (bounds.Width < 100) bounds.Width = 100;
@@ -670,7 +673,7 @@ namespace Line
             // 创建辅助线 - 使用包围框的实际位置
             if (guideLinesEnabled)
             {
-                CreateGuideLines(currentScreen, boundingBox.Bounds);
+                CreateGuideLines(targetScreen, boundingBox.Bounds);
             }
             
             isVisible = true;
