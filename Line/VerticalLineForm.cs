@@ -933,6 +933,12 @@ namespace Line
                     WriteIndented = true
                 });
 
+                var configDir = Path.GetDirectoryName(configPath);
+                if (!Directory.Exists(configDir))
+                {
+                    Directory.CreateDirectory(configDir);
+                }
+
                 File.WriteAllText(configPath, jsonString);
             }
             catch (Exception ex)
